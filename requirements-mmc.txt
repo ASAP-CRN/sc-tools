@@ -1,0 +1,1 @@
+cell_type_mapper @ git+https://github.com/AllenInstitute/cell_type_mapper.git@v1.5.3

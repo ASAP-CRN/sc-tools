@@ -1,0 +1,13 @@
+[console_scripts]
+sc-add-harmony = sc_tools.add_harmony:cli
+sc-artifact-metrics = sc_tools.artifact_metrics:cli
+sc-clustering-umap = sc_tools.clustering_umap:cli
+sc-filter = sc_tools.filter:cli
+sc-integrate-scvi = sc_tools.integrate_scvi:cli
+sc-label-scanvi = sc_tools.label_scanvi:cli
+sc-merge-and-plot-qc = sc_tools.merge_and_plot_qc:cli
+sc-mmc = sc_tools.mmc:cli
+sc-plot-groups-and-feats = sc_tools.plot_groups_and_feats:cli
+sc-prep-metadata = sc_tools.prep_metadata:cli
+sc-process = sc_tools.process:cli
+sc-transcriptional-phenotype = sc_tools.transcriptional_phenotype:cli
