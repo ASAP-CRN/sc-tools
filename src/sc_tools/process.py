@@ -14,7 +14,10 @@ def process_adata(
     adata: AnnData,
     workflow_name: str,
     # markers: pd.DataFrame,
-    batch_key: str
+    batch_key: str,
+    norm_target_sum: float,
+    n_top_genes: int,
+    n_comps: int,
 ) -> tuple[AnnData, pd.DataFrame, pd.DataFrame]:
     """
     Do feature selection and add PCA
@@ -23,7 +26,7 @@ def process_adata(
     # Does this work with sparse uint8?
     adata.layers["counts"] = adata.X.copy()  # type: ignore
 
-    sc.pp.normalize_total(adata, target_sum=args.norm_target_sum)
+    sc.pp.normalize_total(adata, target_sum=norm_target_sum)
     sc.pp.log1p(adata)
 
     # Detect sample source from workflow name
@@ -32,7 +35,9 @@ def process_adata(
     elif workflow_name == "mouse_sc_rnaseq":
         source = "mouse"
     else:
-        raise ValueError(f"[ERROR] Source cannot be detected from workflow name: [{workflow_name}]")
+        raise ValueError(
+            f"[ERROR] Source cannot be detected from workflow name: [{workflow_name}]"
+        )
 
     score_cell_cycle(adata, organism=source)
 
@@ -40,7 +45,7 @@ def process_adata(
     # # defensive
     # markers = markers[~markers.index.duplicated(keep="first")].rename_axis(index=None)
 
-    batch_key = args.batch_key
+    # batch_key = batch_key
     # WARNING: using 'sample' can cause loess to fail in the highly_variable_genes function
     # HACK: using 'batch_id' instead of 'sample' for now
     if batch_key == "sample" or batch_key == "sample_id":
@@ -49,7 +54,7 @@ def process_adata(
 
     hvgs_full = sc.experimental.pp.highly_variable_genes(
         adata,
-        n_top_genes=args.n_top_genes,
+        n_top_genes=n_top_genes,
         batch_key=batch_key,
         flavor="pearson_residuals",
         check_values=True,
@@ -73,11 +78,11 @@ def process_adata(
 
     full_features = adata.var.copy()
 
-    hvgs_full = hvgs_full.iloc[: args.n_top_genes].index.to_list()
+    hvgs_full = hvgs_full.iloc[:n_top_genes].index.to_list()
     adata = adata[:, adata.var.index.isin(hvgs_full)]
 
     # Add PCA of log1p normalized
-    sc.pp.pca(adata, n_comps=args.n_comps)
+    sc.pp.pca(adata, n_comps=n_comps)
     ## Consider this alternate pca and avoid the normalization log1p?
     # scanpy.experimental.pp.normalize_pearson_residuals_pca(adata, *, theta=100, clip=None, n_comps=50, random_state=0, kwargs_pca=mappingproxy({}), mask_var=_empty, use_highly_variable=None, check_values=True, inplace=True)
 
@@ -93,10 +98,22 @@ def main(args: argparse.Namespace):
     adata = sc.read_h5ad(args.adata_input)  # type: ignore
     # # 1. Load marker_genes
     # markers = pd.read_csv(args.marker_genes, index_col=0)
+    # make sure that our adata.var.index match adata.var.gene_name
+    # the previous step MMC replced them with ensigns IDs
+
+    if adata.var.index.name != "gene_name":
+        adata.var.set_index("gene_name", inplace=True)
 
     # 2. Process data
     # adata, full_features, hvg_features = process_adata(adata, markers, args.batch_key)
-    adata, full_features, hvg_features = process_adata(adata, args.workflow_name, args.batch_key)
+    adata, full_features, hvg_features = process_adata(
+        adata,
+        args.workflow_name,
+        args.batch_key,
+        args.norm_target_sum,
+        args.n_top_genes,
+        args.n_comps,
+    )
 
     # 3. Save the filtered adata
     adata.write_h5ad(filename=args.adata_output, compression="gzip")
@@ -112,7 +129,7 @@ def main(args: argparse.Namespace):
     # output_metrics.to_csv(args.output_validation_file, index=True)
 
 
-def cli():
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Normalize and identify features (HVG)"
     )
@@ -150,7 +167,7 @@ def cli():
         "--n-comps",
         type=int,
         required=True,
-        help="Number of principal components to compute [30]"
+        help="Number of principal components to compute [30]",
     )
     # parser.add_argument(
     #     "--marker-genes",
@@ -179,7 +196,3 @@ def cli():
 
     args = parser.parse_args()
     main(args)
-
-
-if __name__ == "__main__":
-    cli()

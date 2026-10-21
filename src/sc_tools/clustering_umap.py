@@ -33,6 +33,7 @@ def main(args: argparse.Namespace):
 
 
 def cli():
+    global args
     parser = argparse.ArgumentParser(description="Annotate clusters")
     parser.add_argument(
         "--latent-key",

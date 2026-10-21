@@ -48,6 +48,7 @@ def main(args: argparse.Namespace):
 
 
 def cli():
+    global args
     parser = argparse.ArgumentParser(description="Preprocess by calculating doublets and QC metrics")
     parser.add_argument(
         "--adata-input",

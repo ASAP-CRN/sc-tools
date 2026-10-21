@@ -82,6 +82,7 @@ def main(args: argparse.Namespace):
 
 
 def cli():
+    global args
     parser = argparse.ArgumentParser(
         description="Compute `scib` metrics on final artifacts"
     )

@@ -6,6 +6,7 @@ import argparse
 import anndata as ad
 import scvi
 
+
 def integrate_with_scvi(
     adata: ad.AnnData,
     batch_key: str,
@@ -28,7 +29,7 @@ def integrate_with_scvi(
     early_stopping_patience = 20
 
     # Set parameters based on numerical instabilities
-    threshold_cells = 3.05e6 # No. of cells in Sep 2025 PMDBS sc cohort (Lee, Hardy, Hafler, Jakobsson, Scherzer)
+    threshold_cells = 3.05e6  # No. of cells in Sep 2025 PMDBS sc cohort (Lee, Hardy, Hafler, Jakobsson, Scherzer)
     if adata.n_obs > threshold_cells:
         plan_kwargs = {"lr": 1e-4}
         gradient_clip_val = 5.0
@@ -37,7 +38,7 @@ def integrate_with_scvi(
         print(f"--- Using gradient clipping: {gradient_clip_val}")
     else:
         # Defaults
-        plan_kwargs = {"lr": 1e-3} 
+        plan_kwargs = {"lr": 1e-3}
         gradient_clip_val = None
         print(f"AnnData object contains {adata.n_obs} which is < {threshold_cells}")
         print(f"--- Using default learning rate: {plan_kwargs}")
@@ -91,7 +92,7 @@ def main(args: argparse.Namespace):
     adata.write_h5ad(filename=args.adata_output, compression="gzip")
 
 
-def cli():
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run scVI integration")
     parser.add_argument(
         "--latent-key",
@@ -126,7 +127,3 @@ def cli():
 
     args = parser.parse_args()
     main(args)
-
-
-if __name__ == "__main__":
-    cli()

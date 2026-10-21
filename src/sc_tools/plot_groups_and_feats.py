@@ -51,6 +51,7 @@ def main(args: argparse.Namespace):
 
 
 def cli():
+    global args
     parser = argparse.ArgumentParser(description="Plot groups and features")
     parser.add_argument(
         "--adata-input",

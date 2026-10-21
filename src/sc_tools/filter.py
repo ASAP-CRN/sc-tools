@@ -73,6 +73,7 @@ def main(args: argparse.Namespace):
 
 
 def cli():
+    global args
     parser = argparse.ArgumentParser(description="Filter")
     parser.add_argument(
         "--adata-input",

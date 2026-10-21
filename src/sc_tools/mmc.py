@@ -7,9 +7,8 @@ from pathlib import Path
 import os
 import argparse
 
-
 # Works best on CPU
-# os.environ["AIBS_BKP_USE_TORCH"] = "false"
+os.environ["AIBS_BKP_USE_TORCH"] = "false"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -22,6 +21,29 @@ RNG_SEED = 11235813
 # MAX_GB = 48.0
 
 
+def _main_shim(
+    output_prefix: str,
+    adata_input: str,
+    mmc_precomputed_stats: str,
+    mmc_marker_genes: str = None,
+    n_processors: int = None,
+    tmp_dir: str = None,
+    max_gb: float = None,
+):
+    """Programmatic entry point mirroring the `sc-mmc` CLI arguments."""
+    args = argparse.Namespace(
+        output_prefix=str(output_prefix),
+        adata_input=str(adata_input),
+        mmc_precomputed_stats=str(mmc_precomputed_stats),
+        mmc_marker_genes=str(mmc_marker_genes) if mmc_marker_genes else None,
+        n_processors=n_processors,
+        tmp_dir=str(tmp_dir) if tmp_dir else None,
+        max_gb=max_gb,
+    )
+    main(args)
+    return
+
+
 def main(args: argparse.Namespace):
     EXTENDED_RESULTS_JSON = f"{args.output_prefix}.extended_results.json"
     CSV_RESULTS = f"{args.output_prefix}.results.csv"
@@ -32,16 +54,14 @@ def main(args: argparse.Namespace):
     print(f"LOG_FILE: {LOG_FILE}")
 
     config = {
-        "precomputed_stats": {
-            "path": args.mmc_precomputed_stats
-        },
+        "precomputed_stats": {"path": args.mmc_precomputed_stats},
         "type_assignment": {
             "bootstrap_factor": 0.5,
             "bootstrap_iteration": 100,
             "normalization": "raw",
             "rng_seed": RNG_SEED,
             "chunk_size": CHUNK_SIZE,
-            "n_runners_up": N_RUNNERS_UP
+            "n_runners_up": N_RUNNERS_UP,
         },
         "query_path": args.adata_input,
         "extended_result_path": EXTENDED_RESULTS_JSON,
@@ -51,23 +71,27 @@ def main(args: argparse.Namespace):
         "verbose_csv": True,
         "map_to_ensembl": True,
     }
+    # Optional settings; omit when unset so the cell_type_mapper defaults apply
+    # (its schemas reject explicit None for these fields)
+    if args.tmp_dir:
+        config["tmp_dir"] = args.tmp_dir
+    if args.max_gb is not None:
+        config["max_gb"] = args.max_gb
 
     if args.mmc_marker_genes:
         print("Running FromSpecifiedMarkersRunner")
-        config["type_assignment"]["n_processors"] = args.n_processors # Force tool to only use CPUs specified in WDL regardless of available CPUs
-        config["query_markers"] = {
-            "serialized_lookup": args.mmc_marker_genes
-        }
+        # FromSpecifiedMarkersRunner reads n_processors from type_assignment
+        if args.n_processors is not None:
+            config["type_assignment"]["n_processors"] = args.n_processors
+        config["query_markers"] = {"serialized_lookup": args.mmc_marker_genes}
         runner = FromSpecifiedMarkersRunner(args=[], input_data=config)
     else:
         print("Running OnTheFlyMapper")
-        config["reference_markers"] = {
-            "log2_fold_min_th": 0.5
-        }
-        config["query_markers"] = {
-            "n_per_utility": 15,
-            "genes_at_a_time": 1
-        }
+        # OnTheFlyMapper reads n_processors from the top level of the config
+        if args.n_processors is not None:
+            config["n_processors"] = args.n_processors
+        config["reference_markers"] = {"log2_fold_min_th": 0.5}
+        config["query_markers"] = {"n_per_utility": 15, "genes_at_a_time": 1}
         runner = OnTheFlyMapper(args=[], input_data=config)
 
     # Creates the results files: .json, .csv, .txt
@@ -76,7 +100,9 @@ def main(args: argparse.Namespace):
 
 
 def cli():
-    parser = argparse.ArgumentParser(description="Map cell types with Allen Institute's Cell Type Mapper")
+    parser = argparse.ArgumentParser(
+        description="Map cell types with Allen Institute's Cell Type Mapper"
+    )
     parser.add_argument(
         "--adata-input",
         type=str,
@@ -93,7 +119,7 @@ def cli():
         "--mmc-marker-genes",
         type=str,
         required=False,
-        help="Path to MMC marker genes JSON file",
+        help="Path to MMC marker genes JSON file (omit to compute markers on the fly)",
     )
     parser.add_argument(
         "--n-processors",
@@ -102,12 +128,24 @@ def cli():
         help="The number of independent worker processes to spin up",
     )
     parser.add_argument(
+        "--tmp-dir",
+        type=str,
+        required=False,
+        help="Temporary directory for writing out scratch files",
+    )
+    parser.add_argument(
+        "--max-gb",
+        type=float,
+        required=False,
+        help="Memory (GB) allowed when converting a CSC matrix to an on-disk CSR matrix",
+    )
+    parser.add_argument(
         "--output-prefix",
         type=str,
         required=True,
         help="Prefix used to name output files",
     )
-    
+
     args = parser.parse_args()
     main(args)
 

@@ -6,7 +6,92 @@ import scanpy as sc
 from anndata import AnnData
 
 
-def add_harmony(adata: AnnData):
+# copied from scanpy to fix bug
+def harmony_integrate(
+    adata: AnnData,
+    key: str,
+    *,
+    basis: str = "X_pca",
+    adjusted_basis: str = "X_pca_harmony",
+    **kwargs,
+):
+    """Use harmonypy :cite:p:`Korsunsky2019` to integrate different experiments.
+
+    Harmony :cite:p:`Korsunsky2019` is an algorithm for integrating single-cell
+    data from multiple experiments. This function uses the python
+    port of Harmony, ``harmonypy``, to integrate single-cell data
+    stored in an AnnData object. As Harmony works by adjusting the
+    principal components, this function should be run after performing
+    PCA but before computing the neighbor graph, as illustrated in the
+    example below.
+
+    Parameters
+    ----------
+    adata
+        The annotated data matrix.
+    key
+        The name of the column in ``adata.obs`` that differentiates
+        among experiments/batches. To integrate over two or more covariates,
+        you can pass multiple column names as a list. See ``vars_use``
+        parameter of the ``harmonypy`` package for more details.
+    basis
+        The name of the field in ``adata.obsm`` where the PCA table is
+        stored. Defaults to ``'X_pca'``, which is the default for
+        ``sc.pp.pca()``.
+    adjusted_basis
+        The name of the field in ``adata.obsm`` where the adjusted PCA
+        table will be stored after running this function. Defaults to
+        ``X_pca_harmony``.
+    kwargs
+        Any additional arguments will be passed to
+        ``harmonypy.run_harmony()``.
+
+    Returns
+    -------
+    Updates adata with the field ``adata.obsm[obsm_out_field]``,
+    containing principal components adjusted by Harmony such that
+    different experiments are integrated.
+
+    Example
+    -------
+    First, load libraries and example dataset, and preprocess.
+
+    >>> import scanpy as sc
+    >>> import scanpy.external as sce
+    >>> adata = sc.datasets.pbmc3k()
+    >>> sc.pp.recipe_zheng17(adata)
+    >>> sc.pp.pca(adata)
+
+    We now arbitrarily assign a batch metadata variable to each cell
+    for the sake of example, but during real usage there would already
+    be a column in ``adata.obs`` giving the experiment each cell came
+    from.
+
+    >>> adata.obs["batch"] = 1350 * ["a"] + 1350 * ["b"]
+
+    Finally, run harmony. Afterwards, there will be a new table in
+    ``adata.obsm`` containing the adjusted PC's.
+
+    >>> sce.pp.harmony_integrate(adata, "batch")
+    >>> "X_pca_harmony" in adata.obsm
+    True
+
+    """
+    try:
+        import harmonypy
+    except ImportError as e:
+        e.add_note("Please install `harmonypy` and try again.")
+        raise
+
+    x = adata.obsm[basis].astype(np.float64)
+
+    harmony_out = harmonypy.run_harmony(x, adata.obs, key, **kwargs)
+
+    # adata.obsm[adjusted_basis] = harmony_out.Z_corr.T. # harmony seems to have changed behavior
+    adata.obsm[adjusted_basis] = harmony_out.Z_corr
+
+
+def add_harmony(adata: AnnData, batch_key: str):
     """
     Adds Harmony integration to AnnData object in place
     """
@@ -14,13 +99,14 @@ def add_harmony(adata: AnnData):
     sc.settings.n_jobs = -1
 
     print("Running Harmony integration")
-    sc.external.pp.harmony_integrate(adata, args.batch_key)
+    # sc.external.pp.harmony_integrate(adata, batch_key)
+    harmony_integrate(adata, batch_key)
 
 
 def main(args: argparse.Namespace):
     adata = sc.read_h5ad(args.adata_input)  # type: ignore
     # Operations done in place
-    add_harmony(adata)
+    add_harmony(adata, args.batch_key)
 
     # 9. Save the adata
     adata.write_h5ad(filename=args.adata_output, compression="gzip")
@@ -33,6 +119,7 @@ def main(args: argparse.Namespace):
 
 
 def cli():
+    global args
     parser = argparse.ArgumentParser(description="Add Harmony integration")
     parser.add_argument(
         "--batch-key",

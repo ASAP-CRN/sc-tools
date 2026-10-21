@@ -11,8 +11,9 @@ Transforms applied to the upstream scripts:
   * `sys.path.append("/opt/scripts/utility")` + `from helpers import ...`
     -> `from sc_tools.helpers import ...`
   * `/opt/resources/<file>` -> path inside the installed package
-  * the `if __name__ == "__main__":` block is wrapped in `cli()` so each script
-    is exposed as a console script (`sc-<name>`)
+  * the `if __name__ == "__main__":` block is wrapped in `cli()` (declaring
+    `global args`, which some upstream functions read) so each script is
+    exposed as a console script (`sc-<name>`)
 """
 
 import re
@@ -46,7 +47,8 @@ def transform_script(text: str, name: str) -> str:
         main_guard = 'if __name__ == "__main__":'
         if text.count(f"\n{main_guard}\n") != 1:
             sys.exit(f"error: {name}: expected exactly one top-level `{main_guard}` block")
-        text = text.replace(f"\n{main_guard}\n", "\ndef cli():\n")
+        # upstream helpers read the module-level `args` set in the main guard
+        text = text.replace(f"\n{main_guard}\n", "\ndef cli():\n    global args\n")
         text = text.rstrip("\n") + f"\n\n\n{main_guard}\n    cli()\n"
     return text
 

@@ -97,6 +97,7 @@ def main(args: argparse.Namespace):
 
 
 def cli():
+    global args
     parser = argparse.ArgumentParser(description="Merge AnnData objects and plot QC metrics")
     parser.add_argument(
         "--adata-objects-fofn",

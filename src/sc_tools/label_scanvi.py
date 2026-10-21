@@ -11,12 +11,14 @@ def label_with_scanvi(
     adata: ad.AnnData,
     model: scvi.model.SCVI,
     num_workers: int,
-    workflow_name: str
+    workflow_name: str,
+    latent_key: str,
+    predictions_key: str,
 ) -> tuple[ad.AnnData, scvi.model.SCANVI]:
     """
     Fit scANVI model to AnnData object
     """
-    
+
     # Fixed parameters
     scanvi_epochs = 300
     batch_size = 1024
@@ -29,11 +31,15 @@ def label_with_scanvi(
 
     # Set parameters based on numerical instabilities and source
     if workflow_name in ("pmdbs_sc_rnaseq", "pmdbs_sc_multiome"):
-        threshold_cells = 3.05e6 # No. of cells in Sep 2025 PMDBS sc cohort (Lee, Hardy, Hafler, Jakobsson, Scherzer)
+        threshold_cells = 3.05e6  # No. of cells in Sep 2025 PMDBS sc cohort (Lee, Hardy, Hafler, Jakobsson, Scherzer)
     elif workflow_name == "mouse_sc_rnaseq":
-        threshold_cells = 1e6 # Approx. no. of cells in Dec 2025 Mouse sc cohort (Cragg, Biederer)
+        threshold_cells = (
+            1e6  # Approx. no. of cells in Dec 2025 Mouse sc cohort (Cragg, Biederer)
+        )
     else:
-        raise ValueError(f"[ERROR] Source cannot be detected from workflow name: [{workflow_name}]")
+        raise ValueError(
+            f"[ERROR] Source cannot be detected from workflow name: [{workflow_name}]"
+        )
     if adata.n_obs > threshold_cells:
         plan_kwargs = {"lr": 1e-4}
         gradient_clip_val = 5.0
@@ -42,7 +48,7 @@ def label_with_scanvi(
         print(f"--- Using gradient clipping: {gradient_clip_val}")
     else:
         # Defaults
-        plan_kwargs = {"lr": 1e-3} 
+        plan_kwargs = {"lr": 1e-3}
         gradient_clip_val = None
         print(f"AnnData object contains {adata.n_obs} which is < {threshold_cells}")
         print(f"--- Using default learning rate: {plan_kwargs}")
@@ -68,16 +74,16 @@ def label_with_scanvi(
     )
 
     print("Generating scANVI latents and predictions")
-    adata.obsm[args.latent_key] = scanvi_model.get_latent_representation(adata)
-    adata.obs[args.predictions_key] = scanvi_model.predict(adata)
+    adata.obsm[latent_key] = scanvi_model.get_latent_representation(adata)
+    adata.obs[predictions_key] = scanvi_model.predict(adata)
 
     return (adata, scanvi_model)
 
 
 def main(args: argparse.Namespace):
     # Set the number of data loader workers
-    #num_workers = max(1, os.cpu_count() - 1)
-    num_workers = 0 # Pytorch bug unable to mmap solution https://github.com/pytorch/pytorch/issues/92134
+    # num_workers = max(1, os.cpu_count() - 1)
+    num_workers = 0  # Pytorch bug unable to mmap solution https://github.com/pytorch/pytorch/issues/92134
     scvi.settings.dl_num_workers = num_workers
     print(f"Using {scvi.settings.dl_num_workers} workers")
 
@@ -89,7 +95,14 @@ def main(args: argparse.Namespace):
         adata=adata,
     )
     # 4. Get scANVI model
-    adata, scanvi_model = label_with_scanvi(adata, model, num_workers, args.workflow_name)
+    adata, scanvi_model = label_with_scanvi(
+        adata,
+        model,
+        num_workers,
+        args.workflow_name,
+        args.latent_key,
+        args.predictions_key,
+    )
     # 5. Save the integrated adata and scANVI model
     scanvi_model.save(args.output_scanvi_dir, overwrite=True)
     # 6. Save the latent space
@@ -97,11 +110,16 @@ def main(args: argparse.Namespace):
     # 7. Save the cell types to feather
     # adata.obs[[args.predictions_key]].to_feather(args.output_cell_types_file, compression="gzip")
     # 7. Save the cell types to parquet
-    adata.obs[[args.predictions_key]].to_parquet(args.output_cell_types_file, compression="gzip")
+    adata.obs[[args.predictions_key]].to_parquet(
+        args.output_cell_types_file, compression="gzip"
+    )
 
 
 def cli():
-    parser = argparse.ArgumentParser(description="Leverage cell-type from MMC to assign the rest of the cells with scANVI")
+    global args
+    parser = argparse.ArgumentParser(
+        description="Leverage cell-type from MMC to assign the rest of the cells with scANVI"
+    )
     parser.add_argument(
         "--workflow-name",
         type=str,

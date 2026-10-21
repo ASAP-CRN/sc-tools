@@ -5,6 +5,7 @@
 # import muon as mu
 import scanpy as sc
 import argparse
+import json
 import pandas as pd
 import sys
 from anndata import AnnData
@@ -14,17 +15,43 @@ import pyarrow
 
 from sc_tools.helpers import update_validation_metrics
 
+# Siletti (whole human brain, CCN202210140) cluster annotated with the 'DA VGLUT2' neurotransmitter
+SILETTI_DA_CLUSTER = "Splat_395"
 
-# os.environ["AIBS_BKP_USE_TORCH"] = "false"
-# os.environ["NUMEXPR_NUM_THREADS"] = "1"
-# os.environ["MKL_NUM_THREADS"] = "1"
-# os.environ["OMP_NUM_THREADS"] = "1"
 
-# CHUNK_SIZE = 40000
-# N_RUNNERS_UP = 5
-# RNG_SEED = 11235813
-# N_PROCESSORS = 8
-# MAX_GB = 48.0
+def read_csv_results2(csv_results_path: str | Path) -> tuple[pd.DataFrame, list[str]]:
+    """
+    Read the results file and return a pandas DataFrame plus the readable taxonomy
+    hierarchy declared in its header.
+    """
+    ## HEADER
+    # metadata = team-jakobsson.mmc_otf_mapping.SEAAD.extended_results.json
+    # taxonomy hierarchy = ["CCN20230505_CLAS", "CCN20230505_SUBC", "CCN20230505_SUPT"]
+    # readable taxonomy hierarchy = ["class", "subclass", "supertype"]
+    # algorithm: 'hierarchical'; codebase: http://github.com/AllenInstitute/cell_type_mapper; version: 1.5.3
+    # cell_id,class_label,class_name,...
+    #
+    # The level names depend on which precomputed stats reference was mapped against, and
+    # every results column name is derived from them, so read them rather than assume them.
+    taxonomy_levels: list[str] = []
+    n_header_lines = 0
+    with open(csv_results_path) as results_file:
+        for line in results_file:
+            if not line.startswith("#"):
+                break
+            n_header_lines += 1
+            if line.startswith("# readable taxonomy hierarchy"):
+                taxonomy_levels = json.loads(line.split("=", 1)[1].strip())
+
+    if not taxonomy_levels:
+        raise ValueError(
+            f"[ERROR] No '# readable taxonomy hierarchy' header line in [{csv_results_path}]"
+        )
+
+    results = pd.read_csv(csv_results_path, header=n_header_lines)
+    results.set_index("cell_id", inplace=True)
+    results.index.name = None
+    return results, taxonomy_levels
 
 
 # Results header is the first 4 lines
@@ -45,58 +72,184 @@ def read_csv_results(csv_results_path: str | Path) -> pd.DataFrame:
     return results
 
 
-def summarize_mmc_results(mmc_results: pd.DataFrame, workflow_name: str):
+def transform_mmc_results_siletti(
+    mmc_results: pd.DataFrame, rho_threshold: float = 0.5, prob_threshold: float = 0.5
+) -> pd.DataFrame:
+    """
+    Transform the MMC results to assign cell types based on the correlation coefficients and bootstrapping probabilities. If either the correlation coefficient or bootstrapping probability is less than 0.5, the cell type will be assigned as "Unknown".
+
+    Args:
+        mmc_results: DataFrame containing the MMC results with columns for class and subclass names, correlation coefficients, and bootstrapping probabilities.
+    Returns:
+        DataFrame with columns for cell type, phenotype, correlation coefficient, bootstrapping probability, class name, subclass name, and supertype name.
+    """
+
+    # Extract cell type mappings for 3 highest levels of the taxonomy (supertype, type, subtype)
+    mmc_results.loc[:, "cell_supertype"] = mmc_results.iloc[:, 1]
+    mmc_results.loc[:, "prob_supertype"] = mmc_results.iloc[:, 2].astype(float)
+    mmc_results.loc[:, "rho_supertype"] = mmc_results.iloc[:, 4].astype(float)
+    mmc_results.loc[:, "cell_type"] = mmc_results.iloc[:, 6]
+    mmc_results.loc[:, "prob_type"] = mmc_results.iloc[:, 7].astype(float)
+    mmc_results.loc[:, "rho_type"] = mmc_results.iloc[:, 9].astype(float)
+    mmc_results.loc[:, "cell_subtype"] = mmc_results.iloc[:, 11]
+    mmc_results.loc[:, "prob_subtype"] = mmc_results.iloc[:, 12].astype(float)
+    mmc_results.loc[:, "rho_subtype"] = mmc_results.iloc[:, 14].astype(float)
+
+    # Change the phenotype to unknown if the correlation or bootstrap probability < 0.5
+    mmc_results.loc[mmc_results["rho_supertype"] < rho_threshold, "cell_supertype"] = (
+        "Unknown"
+    )
+    mmc_results.loc[
+        mmc_results["prob_supertype"] < prob_threshold, "cell_supertype"
+    ] = "Unknown"
+    mmc_results.loc[mmc_results["rho_type"] < rho_threshold, "cell_type"] = "Unknown"
+    mmc_results.loc[mmc_results["prob_type"] < prob_threshold, "cell_type"] = "Unknown"
+    mmc_results.loc[mmc_results["rho_subtype"] < rho_threshold, "cell_subtype"] = (
+        "Unknown"
+    )
+    mmc_results.loc[mmc_results["prob_subtype"] < prob_threshold, "cell_subtype"] = (
+        "Unknown"
+    )
+
+    # Keep only the relevant columns for merging with the adata obs
+    mmc_results = mmc_results[["cell_supertype", "cell_type", "cell_subtype", "rho_supertype", "prob_supertype", "rho_type", "prob_type", "rho_subtype", "prob_subtype"]]  # type: ignore silences pylance warning
+
+    return mmc_results
+
+
+def _map_siletti_to_ASAP9(mmc_results: pd.DataFrame) -> pd.DataFrame:
+    """
+    Map the Siletti cell types to the ASAP9 cell types. This is a temporary function until the Siletti cell types are updated to match the ASAP9 cell types.
+
+    Args:
+        mmc_results: DataFrame containing the MMC results with columns for cell_supertype, cell_type, and cell_subtype.
+    Returns:
+        DataFrame with columns for cell_supertype, cell_type, and cell_subtype mapped to the ASAP9 cell types.
+    """
+    # Define the mapping from Siletti to ASAP9 cell types
+    mapping = {
+        "GABAergic": "GABAergic",
+        "Glutamatergic": "Glutamatergic",
+        "Serotonergic": "Serotonergic",
+        "Unknown": "Unknown",
+        "Astrocytes": "Astrocytes",
+        "Oligodendrocytes": "Oligodendrocytes",
+        "Microglia": "Microglia",
+        "Endothelial cells": "Endothelial cells",
+        "Pericytes": "Pericytes",
+        "OPCs": "OPCs",
+        "Ependymal cells": "Ependymal cells",
+        "Mural cells": "Mural cells",
+    }
+
+    # Map the cell types in the mmc_results DataFrame
+    mmc_results["cell_supertype"] = mmc_results["cell_supertype"].map(mapping)
+    mmc_results["cell_type"] = mmc_results["cell_type"].map(mapping)
+    mmc_results["cell_subtype"] = mmc_results["cell_subtype"].map(mapping)
+
+    return mmc_results
+
+
+def summarize_mmc_results(
+    mmc_results: pd.DataFrame, workflow_name: str, taxonomy_levels: list[str]
+) -> pd.DataFrame:
     # First get "classes"
     # Define row indices for each class
     # HUMAN
     if workflow_name in ("pmdbs_sc_rnaseq", "pmdbs_sc_multiome"):
-        gabaergic = mmc_results["class_name"] == "Neuronal: GABAergic"
-        glutamatergic = mmc_results["class_name"] == "Neuronal: Glutamatergic"
-        non_neuronal = mmc_results["class_name"] == "Non-neuronal and Non-neural"
+        # The readable taxonomy hierarchy determines every column name MMC writes, so
+        # dispatch on it instead of assuming the SEA-AD levels.
+        if taxonomy_levels == ["class", "subclass", "supertype"]:
+            gabaergic = mmc_results["class_name"] == "Neuronal: GABAergic"
+            glutamatergic = mmc_results["class_name"] == "Neuronal: Glutamatergic"
+            non_neuronal = mmc_results["class_name"] == "Non-neuronal and Non-neural"
 
-        mmc_results.loc[gabaergic, "phenotype"] = "GABAergic"
-        mmc_results.loc[glutamatergic, "phenotype"] = "Glutamatergic"
-        mmc_results.loc[non_neuronal, "phenotype"] = mmc_results.loc[
-            non_neuronal, "subclass_name"
-        ]
-
-        mmc_results.loc[glutamatergic, "rho"] = mmc_results.loc[
-            glutamatergic, "class_correlation_coefficient"
-        ]
-        mmc_results.loc[gabaergic, "rho"] = mmc_results.loc[
-            gabaergic, "class_correlation_coefficient"
-        ]
-        mmc_results.loc[non_neuronal, "rho"] = mmc_results.loc[
-            non_neuronal, "subclass_correlation_coefficient"
-        ]
-
-        mmc_results.loc[glutamatergic, "prob"] = mmc_results.loc[
-            glutamatergic, "class_bootstrapping_probability"
-        ]
-        mmc_results.loc[gabaergic, "prob"] = mmc_results.loc[
-            gabaergic, "class_bootstrapping_probability"
-        ]
-        mmc_results.loc[non_neuronal, "prob"] = mmc_results.loc[
-            non_neuronal, "subclass_bootstrapping_probability"
-        ]
-
-        mmc_results["cell_type"] = mmc_results["phenotype"]
-
-        # Change the phenotype to unknown if the correlation or bootstrap probability < 0.5
-        mmc_results.loc[mmc_results["rho"] < 0.5, "cell_type"] = "Unknown"
-        mmc_results.loc[mmc_results["prob"] < 0.5, "cell_type"] = "Unknown"
-
-        return mmc_results[
-            [
-                "cell_type",
-                "phenotype",
-                "rho",
-                "prob",
-                "class_name",
-                "subclass_name",
-                "supertype_name",
+            mmc_results.loc[gabaergic, "phenotype"] = "GABAergic"
+            mmc_results.loc[glutamatergic, "phenotype"] = "Glutamatergic"
+            mmc_results.loc[non_neuronal, "phenotype"] = mmc_results.loc[
+                non_neuronal, "subclass_name"
             ]
-        ]
+
+            mmc_results.loc[glutamatergic, "rho"] = mmc_results.loc[
+                glutamatergic, "class_correlation_coefficient"
+            ]
+            mmc_results.loc[gabaergic, "rho"] = mmc_results.loc[
+                gabaergic, "class_correlation_coefficient"
+            ]
+            mmc_results.loc[non_neuronal, "rho"] = mmc_results.loc[
+                non_neuronal, "subclass_correlation_coefficient"
+            ]
+
+            mmc_results.loc[glutamatergic, "prob"] = mmc_results.loc[
+                glutamatergic, "class_bootstrapping_probability"
+            ]
+            mmc_results.loc[gabaergic, "prob"] = mmc_results.loc[
+                gabaergic, "class_bootstrapping_probability"
+            ]
+            mmc_results.loc[non_neuronal, "prob"] = mmc_results.loc[
+                non_neuronal, "subclass_bootstrapping_probability"
+            ]
+
+            mmc_results["cell_type"] = mmc_results["phenotype"]
+
+            # Change the phenotype to unknown if the correlation or bootstrap probability < 0.5
+            mmc_results.loc[mmc_results["rho"] < 0.5, "cell_type"] = "Unknown"
+            mmc_results.loc[mmc_results["prob"] < 0.5, "cell_type"] = "Unknown"
+
+            return mmc_results[
+                [
+                    "cell_type",
+                    "phenotype",
+                    "rho",
+                    "prob",
+                    "class_name",
+                    "subclass_name",
+                    "supertype_name",
+                ]
+            ]
+        elif taxonomy_levels == ["supercluster", "cluster", "subcluster"]:
+            # supercluster is already about as granular as a SEA-AD subclass (e.g.
+            # "Deep-layer corticothalamic and 6b", "Astrocyte"), so it is used directly as
+            # the phenotype instead of being collapsed to a neurotransmitter class.
+            mmc_results["phenotype"] = mmc_results["supercluster_name"]
+            mmc_results["rho"] = mmc_results["supercluster_correlation_coefficient"]
+            mmc_results["prob"] = mmc_results["supercluster_bootstrapping_probability"]
+
+            # Dopaminergic (DA VGLUT2) neurons are a single cluster within the heterogeneous
+            # "Splatter" supercluster (92 clusters), so they are split out using cluster-level scores
+            dopaminergic = mmc_results["cluster_name"] == SILETTI_DA_CLUSTER
+            mmc_results.loc[dopaminergic, "phenotype"] = "Dopaminergic"
+            mmc_results.loc[dopaminergic, "rho"] = mmc_results.loc[
+                dopaminergic, "cluster_correlation_coefficient"
+            ]
+            mmc_results.loc[dopaminergic, "prob"] = mmc_results.loc[
+                dopaminergic, "cluster_bootstrapping_probability"
+            ]
+
+            mmc_results["cell_type"] = mmc_results["phenotype"]
+
+            # Change the phenotype to unknown if the correlation or bootstrap probability < 0.5
+            mmc_results.loc[mmc_results["rho"] < 0.5, "cell_type"] = "Unknown"
+            mmc_results.loc[mmc_results["prob"] < 0.5, "cell_type"] = "Unknown"
+
+            return mmc_results[
+                [
+                    "cell_type",
+                    "phenotype",
+                    "rho",
+                    "prob",
+                    "supercluster_name",
+                    "cluster_name",
+                    "subcluster_name",
+                ]
+            ]
+        else:
+            raise ValueError(
+                f"[ERROR] Unsupported taxonomy hierarchy {taxonomy_levels} in the MMC results; "
+                "expected ['class', 'subclass', 'supertype'] (SEA-AD) or "
+                "['supercluster', 'cluster', 'subcluster'] (10Xv3/Siletti). Check that "
+                "allen_brain_mmc_precomputed_stats_h5 is the intended reference."
+            )
     elif workflow_name == "mouse_sc_rnaseq":
         # MOUSE
         gabaergic = mmc_results["class_name"].str.contains("GABA")
@@ -160,25 +313,33 @@ def summarize_mmc_results(mmc_results: pd.DataFrame, workflow_name: str):
             ]
         ]
     else:
-        raise ValueError(f"[ERROR] Source cannot be detected from workflow name: [{workflow_name}]")
+        raise ValueError(
+            f"[ERROR] Source cannot be detected from workflow name: [{workflow_name}]"
+        )
 
 
 def main(args: argparse.Namespace):
     # Load MMC results
-    results = read_csv_results(args.mmc_results)
-    results = summarize_mmc_results(results, args.workflow_name)
+    # results, taxonomy_levels = read_csv_results2(args.mmc_results)
+    # results = summarize_mmc_results(results, args.workflow_name, taxonomy_levels)
+
+    mmc_results = read_csv_results(args.mmc_results)
+    transformed_results = transform_mmc_results_siletti(mmc_results)
+
     # Save the results to parquet file.. or feather?
-    results.to_parquet(args.output_cell_types_file, compression="gzip")
+    transformed_results.to_parquet(args.output_cell_types_file, compression="gzip")
 
     # Load the adata
     adata = sc.read_h5ad(args.adata_input)
-    adata.obs = adata.obs.merge(results, left_index=True, right_index=True)
+    adata.obs = adata.obs.merge(transformed_results, left_index=True, right_index=True)
     # Save the adata
-    adata.write_h5ad(filename=args.adata_output, compression="gzip")
+    adata.write_h5ad(filename=args.adata_output, compression="lzf")
 
 
-def cli():
-    parser = argparse.ArgumentParser(description="Assign cell type to high-fidelity mappings/transcriptional phenotype (MMC)")
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Assign cell type to high-fidelity mappings/transcriptional phenotype (MMC)"
+    )
     parser.add_argument(
         "--adata-input",
         type=str,
@@ -212,7 +373,3 @@ def cli():
 
     args = parser.parse_args()
     main(args)
-
-
-if __name__ == "__main__":
-    cli()
