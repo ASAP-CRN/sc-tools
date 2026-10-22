@@ -4,6 +4,7 @@
 import argparse
 import scanpy as sc
 from anndata import AnnData
+from numpy import float64 as np_float64
 
 
 # copied from scanpy to fix bug
@@ -77,14 +78,20 @@ def harmony_integrate(
     True
 
     """
+    import importlib.metadata
+
+    version = importlib.metadata.version('harmonypy')
+    if version < 0.1.0:
+        sc.external.pp.harmony_integrate(adata, key)        
+        return 
+
     try:
         import harmonypy
     except ImportError as e:
         e.add_note("Please install `harmonypy` and try again.")
         raise
 
-    x = adata.obsm[basis].astype(np.float64)
-
+    x = adata.obsm[basis].astype(np_float64)
     harmony_out = harmonypy.run_harmony(x, adata.obs, key, **kwargs)
 
     # adata.obsm[adjusted_basis] = harmony_out.Z_corr.T. # harmony seems to have changed behavior
