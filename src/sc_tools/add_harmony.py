@@ -80,10 +80,10 @@ def harmony_integrate(
     """
     import importlib.metadata
 
-    version = importlib.metadata.version('harmonypy')
-    if version < 0.1.0:
-        sc.external.pp.harmony_integrate(adata, key)        
-        return 
+    version = importlib.metadata.version("harmonypy")
+    if version < "0.1.0":
+        sc.external.pp.harmony_integrate(adata, key)
+        return
 
     try:
         import harmonypy
